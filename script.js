@@ -1,16 +1,19 @@
 // --- Variables ---
 const video = document.getElementById('sourceVideo');
 const canvas = document.getElementById('glCanvas');
-const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true, alpha: false });
+// Note: alpha: false helps performance and might fix black screen issues
+const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true, alpha: false }); 
 const fileInput = document.getElementById('videoUpload');
 const btnPlay = document.getElementById('btnPlay');
 const btnRecord = document.getElementById('btnRecord');
 
+// UI Elements for Status
+const placeholder = document.getElementById('placeholder');
 const statusPanel = document.getElementById('statusPanel');
 const statusText = document.getElementById('statusText');
 const statusTimer = document.getElementById('statusTimer');
 const conversionProgress = document.getElementById('conversionProgress');
-const conversionBar = document.getElementById('conversionBar');
+const fileInfo = document.getElementById('fileInfo');
 
 // FFmpeg Instance
 const { createFFmpeg, fetchFile } = FFmpeg;
@@ -37,7 +40,7 @@ let sourceWidth = 0;
 let sourceHeight = 0;
 let timerInterval;
 
-// --- WebGL Shaders (Same as before) ---
+// --- WebGL Shaders ---
 const vsSource = `attribute vec2 a_position; attribute vec2 a_texCoord; varying vec2 v_texCoord; void main() { gl_Position = vec4(a_position, 0, 1); v_texCoord = a_texCoord; }`;
 const fsSource = `
     precision mediump float;
@@ -52,21 +55,25 @@ const fsSource = `
         vec2 onePixel = vec2(1.0, 1.0) / u_textureSize;
         vec4 color = texture2D(u_image, v_texCoord);
         
+        // Simple Box Blur for Denoise
         vec4 colorL = texture2D(u_image, v_texCoord + vec2(-onePixel.x, 0));
         vec4 colorR = texture2D(u_image, v_texCoord + vec2(onePixel.x, 0));
         vec4 colorU = texture2D(u_image, v_texCoord + vec2(0, -onePixel.y));
         vec4 colorD = texture2D(u_image, v_texCoord + vec2(0, onePixel.y));
-        
         vec4 blur = (color + colorL + colorR + colorU + colorD) / 5.0;
         vec4 denoisedColor = mix(color, blur, u_denoise);
 
+        // Laplacian Sharpen
         vec4 edge = texture2D(u_image, v_texCoord + vec2(0, -onePixel.y)) +
                     texture2D(u_image, v_texCoord + vec2(-onePixel.x, 0)) +
                     texture2D(u_image, v_texCoord + vec2(onePixel.x, 0)) +
                     texture2D(u_image, v_texCoord + vec2(0, onePixel.y));
         
         vec4 sharpened = denoisedColor + (denoisedColor * 4.0 - edge) * u_sharpen;
+        
+        // Contrast
         vec3 finalColor = (sharpened.rgb - 0.5) * u_contrast + 0.5;
+        
         gl_FragColor = vec4(finalColor, 1.0);
     }
 `;
@@ -76,6 +83,10 @@ function createShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error("Shader Error:", gl.getShaderInfoLog(shader));
+        return null;
+    }
     return shader;
 }
 const program = gl.createProgram();
@@ -105,7 +116,7 @@ gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-// --- Core Logic ---
+// --- FILE LOADING LOGIC (FIXED) ---
 
 async function loadFFmpeg() {
     if (!ffmpeg) {
@@ -120,6 +131,13 @@ function updateCanvasSize() {
     canvas.width = video.videoWidth * scaleFactor;
     canvas.height = video.videoHeight * scaleFactor;
     gl.viewport(0, 0, canvas.width, canvas.height);
+    
+    // Draw initial frame
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    gl.useProgram(program);
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    
     document.getElementById('liveRes').classList.remove('hidden');
     document.getElementById('liveResText').textContent = `${canvas.width}x${canvas.height} ${isUpscaled ? '(Upscaled)' : ''}`;
 }
@@ -127,29 +145,64 @@ function updateCanvasSize() {
 fileInput.addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (file) {
+        // 1. Show Loading State immediately
+        placeholder.innerHTML = '<div class="text-pink-500"><i class="fas fa-spinner fa-spin text-3xl mb-2"></i><p>Loading Video...</p></div>';
+        
+        // 2. Check Extension Warning
+        const ext = file.name.split('.').pop().toLowerCase();
+        if(['mkv', 'avi', 'ts'].includes(ext)) {
+            alert(`Warning: Browsers usually cannot play .${ext.toUpperCase()} files directly.\n\nIf the video does not load, please convert it to MP4 first or try a different file.`);
+        }
+
+        // 3. Load Video
         const url = URL.createObjectURL(file);
         video.src = url;
+        video.load(); // Force load
+        
+        // Update UI Info
+        fileInfo.classList.remove('hidden');
         document.getElementById('fileName').textContent = file.name;
-        document.getElementById('placeholder').style.display = 'none';
+
+        // 4. Success Handler
         video.onloadedmetadata = () => {
+            placeholder.style.display = 'none'; // Hide placeholder
             sourceWidth = video.videoWidth;
             sourceHeight = video.videoHeight;
             document.getElementById('fileRes').textContent = `${sourceWidth}x${sourceHeight}`;
+            
             isUpscaled = false; 
             updateCanvasSize();
+            
             btnPlay.disabled = false;
             btnRecord.disabled = false;
             
-            // Preload FFmpeg silently when video loads
-            loadFFmpeg().catch(console.error);
+            // Try preloading FFmpeg
+            loadFFmpeg().catch(err => console.log("FFmpeg preload optional error:", err));
+        };
+
+        // 5. Error Handler (Crucial for AVI/MKV)
+        video.onerror = () => {
+            placeholder.innerHTML = `
+                <div class="text-red-500 text-center">
+                    <i class="fas fa-exclamation-triangle text-4xl mb-2"></i>
+                    <p class="font-bold">Format Not Supported</p>
+                    <p class="text-sm text-gray-400 mt-2">Browser cannot decode this file.</p>
+                    <p class="text-xs text-gray-500">Try using .MP4 or .WebM</p>
+                </div>
+            `;
+            alert("Error: This video format is not supported by your browser.\nPlease use MP4 or WebM files.");
         };
     }
 });
 
 function render() {
     if (video.paused || video.ended) return;
+    
+    // Update Texture
     gl.bindTexture(gl.TEXTURE_2D, texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+    
+    // Draw
     gl.useProgram(program);
     
     gl.enableVertexAttribArray(positionLocation);
@@ -166,39 +219,84 @@ function render() {
     gl.uniform1f(contrastLoc, parseFloat(sliders.contrast.value));
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
+    
     animationId = requestAnimationFrame(render);
 }
 
 btnPlay.addEventListener('click', () => {
-    if (video.paused) { video.play(); render(); btnPlay.innerHTML = '<i class="fas fa-pause mr-2"></i> Pause'; }
-    else { video.pause(); cancelAnimationFrame(animationId); btnPlay.innerHTML = '<i class="fas fa-play mr-2"></i> Preview'; }
+    if(!video.src) return;
+    if (video.paused) { 
+        video.play(); 
+        render(); 
+        btnPlay.innerHTML = '<i class="fas fa-pause mr-2"></i> Pause'; 
+        btnPlay.classList.add('bg-pink-600');
+    } else { 
+        video.pause(); 
+        cancelAnimationFrame(animationId); 
+        btnPlay.innerHTML = '<i class="fas fa-play mr-2"></i> Preview'; 
+        btnPlay.classList.remove('bg-pink-600');
+    }
 });
 
-// Auto Enhance & Upscale Buttons
+// Auto Enhance
 document.getElementById('btnAutoEnhance').addEventListener('click', () => {
-    sliders.sharpen.value = 1.2; sliders.denoise.value = 0.2; sliders.contrast.value = 1.05;
+    if(!video.src) return;
+    sliders.sharpen.value = 1.2; 
+    sliders.denoise.value = 0.2; 
+    sliders.contrast.value = 1.05;
     Object.keys(sliders).forEach(key => values[key].textContent = sliders[key].value);
+    // Render one frame to show changes if paused
+    if(video.paused) requestAnimationFrame(() => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    });
 });
+
+// Upscale
 document.getElementById('btnUpscale').addEventListener('click', () => {
-    isUpscaled = !isUpscaled; updateCanvasSize();
+    if(!video.src) return;
+    isUpscaled = !isUpscaled; 
+    updateCanvasSize();
     const btn = document.getElementById('btnUpscale');
     const ind = document.getElementById('upscaleIndicator');
-    if(isUpscaled) { btn.classList.add('border-purple-500', 'bg-gray-600'); ind.classList.remove('hidden'); if(sliders.sharpen.value < 0.5) sliders.sharpen.value = 1.0; } 
-    else { btn.classList.remove('border-purple-500', 'bg-gray-600'); ind.classList.add('hidden'); }
+    if(isUpscaled) { 
+        btn.classList.add('border-purple-500', 'bg-gray-600'); 
+        ind.classList.remove('hidden'); 
+        if(parseFloat(sliders.sharpen.value) < 0.5) {
+            sliders.sharpen.value = 1.0; 
+            values.sharpen.textContent = "1.0";
+        }
+    } else { 
+        btn.classList.remove('border-purple-500', 'bg-gray-600'); 
+        ind.classList.add('hidden'); 
+    }
+    // Re-render immediate frame
+    if(video.paused) requestAnimationFrame(() => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    });
 });
+
+// Reset
 document.getElementById('btnReset').addEventListener('click', () => {
     sliders.sharpen.value = 0; sliders.denoise.value = 0; sliders.contrast.value = 1.0;
     Object.keys(sliders).forEach(key => values[key].textContent = sliders[key].value);
     if(isUpscaled) document.getElementById('btnUpscale').click();
+    if(video.paused && video.src) requestAnimationFrame(() => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+    });
 });
 
-// --- RECORDING & MP4 LOGIC ---
+// --- RECORDING ---
 
 async function downloadRecording(blob, format) {
-    const originalName = document.getElementById('fileName').textContent.split('.')[0];
+    const originalName = document.getElementById('fileName').textContent.split('.')[0] || 'video';
     const filename = `${originalName}_ENHANCED_${isUpscaled ? 'Upscaled' : ''}.${format}`;
 
-    // Case 1: If user wants WebM or MKV, or Blob is already MP4 (Native), just download
     if (format !== 'mp4' || blob.type.includes('mp4')) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -209,19 +307,18 @@ async function downloadRecording(blob, format) {
         return;
     }
 
-    // Case 2: Convert to MP4 using FFmpeg (Fallback)
+    // Convert to MP4
     statusText.innerHTML = '<i class="fas fa-sync fa-spin mr-2"></i> Converting to MP4...';
     conversionProgress.classList.remove('hidden');
+    conversionBar.style.width = '50%';
     
     try {
         await loadFFmpeg();
         ffmpeg.FS('writeFile', 'input.webm', await fetchFile(blob));
-        
-        // Command: Transcode to MP4 (Fastest compatible preset)
         await ffmpeg.run('-i', 'input.webm', '-c:v', 'copy', 'output.mp4');
-        
         const data = ffmpeg.FS('readFile', 'output.mp4');
         
+        conversionBar.style.width = '100%';
         const mp4Blob = new Blob([data.buffer], { type: 'video/mp4' });
         const url = URL.createObjectURL(mp4Blob);
         const a = document.createElement('a');
@@ -229,23 +326,18 @@ async function downloadRecording(blob, format) {
         a.download = filename;
         a.click();
         
-        // Cleanup
         ffmpeg.FS('unlink', 'input.webm');
         ffmpeg.FS('unlink', 'output.mp4');
-        
     } catch (e) {
         console.error(e);
-        alert("Conversion to MP4 failed. Downloading as WebM instead.");
-        // Fallback download
+        alert("Conversion failed. Downloading WebM.");
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         a.download = filename.replace('.mp4', '.webm');
         a.click();
     }
-    
     statusPanel.classList.add('hidden');
-    conversionProgress.classList.add('hidden');
 }
 
 btnRecord.addEventListener('click', () => {
@@ -259,13 +351,13 @@ btnRecord.addEventListener('click', () => {
         video.pause();
         statusText.innerHTML = '<i class="fas fa-save mr-2"></i> Saving...';
     } else {
+        if(!video.src) return;
         const fpsVal = document.getElementById('opt-fps').value;
         const formatVal = document.getElementById('opt-format').value;
         const targetFps = fpsVal === 'source' ? 30 : parseInt(fpsVal);
         const stream = canvas.captureStream(targetFps);
         recordedChunks = [];
 
-        // Try to use native MP4 if possible, otherwise WebM
         let mimeType = 'video/webm;codecs=vp9';
         if (formatVal === 'mp4' && MediaRecorder.isTypeSupported('video/mp4;codecs=avc1.42E01E,mp4a.40.2')) {
             mimeType = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
@@ -273,17 +365,13 @@ btnRecord.addEventListener('click', () => {
             mimeType = 'video/mp4';
         }
 
-        const options = { mimeType: mimeType, videoBitsPerSecond: 8000000 };
-        
         try {
-            mediaRecorder = new MediaRecorder(stream, options);
+            mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType, videoBitsPerSecond: 8000000 });
         } catch (e) {
-            console.warn("Native MP4 not supported, falling back to WebM for conversion.");
             mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
         }
 
         mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-        
         mediaRecorder.onstop = () => {
             const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType });
             downloadRecording(blob, formatVal);
@@ -303,6 +391,7 @@ btnRecord.addEventListener('click', () => {
         statusText.innerHTML = '<i class="fas fa-circle text-red-500 mr-2"></i> Recording...';
         
         let seconds = 0;
+        statusTimer.textContent = "00:00";
         timerInterval = setInterval(() => {
             seconds++;
             const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -313,5 +402,15 @@ btnRecord.addEventListener('click', () => {
 });
 
 Object.keys(sliders).forEach(key => {
-    sliders[key].addEventListener('input', (e) => values[key].textContent = e.target.value);
+    sliders[key].addEventListener('input', (e) => {
+        values[key].textContent = e.target.value;
+        // If paused, render once to show slider change
+        if(video.paused && video.src) requestAnimationFrame(() => {
+            gl.useProgram(program);
+            gl.uniform1f(sharpenLoc, parseFloat(sliders.sharpen.value));
+            gl.uniform1f(denoiseLoc, parseFloat(sliders.denoise.value));
+            gl.uniform1f(contrastLoc, parseFloat(sliders.contrast.value));
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+        });
+    });
 });
