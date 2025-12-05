@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-GPU Video Enhancer Pro (MP4 Ready)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Import FFmpeg.wasm (Version 0.11.x for better compatibility without headers) -->
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen flex flex-col font-sans">
+
+    <!-- Header -->
+    <header class="border-b border-gray-800 bg-gray-900/90 backdrop-blur sticky top-0 z-50 p-4">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-10 h-10 bg-gradient-to-br from-pink-600 to-purple-600 rounded flex items-center justify-center">
+                    <i class="fas fa-microchip text-white text-lg"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-xl bg-clip-text text-transparent bg-gradient-to-r from-pink-400 to-purple-400">GPU Enhancer Pro</h1>
+                    <p class="text-xs text-gray-400">Client-Side AI & MP4 Output</p>
+                </div>
+            </div>
+            <div id="gpu-status" class="text-xs bg-gray-800 px-3 py-1 rounded-full text-green-400 flex items-center gap-2 border border-gray-700">
+                <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                GPU Ready
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-grow p-4 grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto w-full">
+        
+        <!-- Controls -->
+        <div class="lg:col-span-4 space-y-4">
+            
+            <!-- Source -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h3 class="font-bold mb-3 text-xs text-gray-400 uppercase tracking-wider"><i class="fas fa-file-video mr-2"></i>Source Input</h3>
+                <input type="file" id="videoUpload" accept="video/*" class="hidden">
+                <label for="videoUpload" class="block w-full border border-dashed border-gray-700 hover:border-pink-500 bg-gray-800/30 hover:bg-gray-800 rounded-lg p-4 text-center cursor-pointer transition group">
+                    <i class="fas fa-upload text-2xl mb-2 text-gray-500 group-hover:text-pink-500 transition-colors"></i>
+                    <p class="text-sm font-medium text-gray-300">Select Video File</p>
+                </label>
+                <div id="fileInfo" class="hidden mt-2 text-xs text-gray-300 bg-gray-800 p-2 rounded flex justify-between items-center">
+                    <span id="fileName" class="truncate max-w-[150px]"></span>
+                    <span id="fileRes" class="bg-gray-700 px-2 py-0.5 rounded text-gray-200"></span>
+                </div>
+            </div>
+
+            <!-- AI Tools -->
+            <div class="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700 rounded-xl p-4 relative overflow-hidden">
+                <div class="absolute top-0 right-0 w-16 h-16 bg-pink-500/10 rounded-bl-full -mr-4 -mt-4"></div>
+                <h3 class="font-bold mb-3 text-xs text-pink-400 uppercase tracking-wider"><i class="fas fa-magic mr-2"></i>AI Processing</h3>
+                
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <button id="btnAutoEnhance" class="bg-gray-700 hover:bg-gray-600 border border-gray-600 hover:border-pink-500 text-white py-2 px-3 rounded-lg text-xs font-bold transition flex flex-col items-center gap-1">
+                        <i class="fas fa-wand-magic-sparkles text-yellow-400 text-lg"></i>
+                        Auto Enhance
+                    </button>
+                    
+                    <button id="btnUpscale" class="bg-gray-700 hover:bg-gray-600 border border-gray-600 hover:border-purple-500 text-white py-2 px-3 rounded-lg text-xs font-bold transition flex flex-col items-center gap-1 relative">
+                        <i class="fas fa-expand text-purple-400 text-lg"></i>
+                        <span id="upscaleText">Upscale x2</span>
+                        <span class="absolute top-1 right-1 w-2 h-2 bg-purple-500 rounded-full hidden" id="upscaleIndicator"></span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Fine Tune -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold text-xs text-gray-400 uppercase tracking-wider"><i class="fas fa-sliders-h mr-2"></i>Manual</h3>
+                    <button id="btnReset" class="text-xs text-gray-500 hover:text-white underline">Reset</button>
+                </div>
+                
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between text-xs mb-1"><span>Sharpness</span><span id="val-sharpen" class="text-pink-400">0.0</span></div>
+                        <input type="range" id="param-sharpen" min="0" max="4" step="0.1" value="0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-xs mb-1"><span>Denoise</span><span id="val-denoise" class="text-blue-400">0.0</span></div>
+                        <input type="range" id="param-denoise" min="0" max="1" step="0.05" value="0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                    <div>
+                         <div class="flex justify-between text-xs mb-1"><span>Contrast</span><span id="val-contrast" class="text-yellow-400">1.0</span></div>
+                         <input type="range" id="param-contrast" min="0.5" max="1.5" step="0.05" value="1.0" class="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Output Settings -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+                <h3 class="font-bold mb-3 text-xs text-gray-400 uppercase tracking-wider"><i class="fas fa-cog mr-2"></i>Output Settings</h3>
+                
+                <div class="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                        <label class="text-xs text-gray-500 block mb-1">Frame Rate</label>
+                        <select id="opt-fps" class="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-pink-500 outline-none">
+                            <option value="source">Source FPS</option>
+                            <option value="30">30 FPS</option>
+                            <option value="60" selected>60 FPS (Smooth)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500 block mb-1">Format</label>
+                        <select id="opt-format" class="w-full bg-gray-800 border border-gray-700 rounded p-1.5 text-xs text-white focus:border-pink-500 outline-none">
+                            <option value="mp4">MP4 (H.264)</option>
+                            <option value="webm">WebM (VP9)</option>
+                            <option value="mkv">MKV (Matroska)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="grid grid-cols-2 gap-3">
+                <button id="btnPlay" disabled class="bg-gray-800 hover:bg-gray-700 text-white py-3 rounded-lg font-bold transition disabled:opacity-50 text-sm">
+                    <i class="fas fa-play mr-2"></i> Preview
+                </button>
+                <button id="btnRecord" disabled class="bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white py-3 rounded-lg font-bold transition disabled:opacity-50 shadow-lg shadow-pink-500/20 text-sm">
+                    <i class="fas fa-circle mr-2"></i> Render
+                </button>
+            </div>
+            
+            <!-- Status & Progress -->
+            <div id="statusPanel" class="hidden bg-gray-800/50 border border-gray-700 p-3 rounded-lg text-xs space-y-2">
+                 <div class="flex justify-between items-center text-gray-300">
+                     <span id="statusText"><i class="fas fa-spinner fa-spin mr-2"></i> Processing...</span>
+                     <span id="statusTimer" class="font-mono">00:00</span>
+                 </div>
+                 <!-- Progress Bar for Conversion -->
+                 <div id="conversionProgress" class="hidden w-full bg-gray-700 rounded-full h-1.5">
+                     <div id="conversionBar" class="bg-green-500 h-1.5 rounded-full" style="width: 0%"></div>
+                 </div>
+            </div>
+
+        </div>
+
+        <!-- Preview Area -->
+        <div class="lg:col-span-8 bg-black rounded-2xl border border-gray-800 relative overflow-hidden flex items-center justify-center min-h-[500px] shadow-2xl">
+            <video id="sourceVideo" class="hidden" playsinline muted loop crossorigin="anonymous"></video>
+            <canvas id="glCanvas" class="max-w-full max-h-[85vh] object-contain"></canvas>
+
+            <div id="placeholder" class="absolute inset-0 flex flex-col items-center justify-center text-gray-600 bg-gray-900/50 backdrop-blur-sm">
+                <div class="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mb-4 border border-gray-700">
+                    <i class="fas fa-film text-3xl text-gray-500"></i>
+                </div>
+                <p class="font-medium text-gray-400">Waiting for video input...</p>
+            </div>
+            
+            <div id="liveRes" class="absolute top-4 left-4 bg-black/70 backdrop-blur px-3 py-1 rounded text-xs text-white border border-white/10 hidden">
+                Output: <span id="liveResText"></span>
+            </div>
+        </div>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
